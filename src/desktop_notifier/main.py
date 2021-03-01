@@ -96,6 +96,13 @@ def get_implementation(macos_legacy: bool = False) -> Type[DesktopNotifierBase]:
 
         return DBusDesktopNotifier
 
+    elif platform.system() == "Windows" and Version(platform.version()) >= Version(
+        "10.0.10240"
+    ):
+        from .winrt import WinRTDesktopNotifier
+
+        return WinRTDesktopNotifier
+
     else:
         from .dummy import DummyNotificationCenter
 

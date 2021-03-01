@@ -7,6 +7,7 @@ requirements = [
     "importlib_resources;python_version<'3.9'",
     "packaging",
     "rubicon-objc;sys_platform=='darwin'",
+    "winrt;sys_platform=='win32'",
 ]
 
 dev_requires = [
