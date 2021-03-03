@@ -6,7 +6,6 @@ event loop.
 """
 
 # system imports
-import sys
 import uuid
 import logging
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -15,6 +14,7 @@ from typing import Optional, TypeVar, cast
 # external imports
 import winrt.windows.ui.notifications as notifications
 import winrt.windows.data.xml.dom as dom
+from winrt.windows.applicationmodel.core import CoreApplication
 
 # local imports
 from .base import Notification, DesktopNotifierBase, Urgency
@@ -56,7 +56,11 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
     ) -> None:
         super().__init__(app_name, app_icon, notification_limit)
         self.manager = notifications.ToastNotificationManager.get_default()
-        self.notifier = self.manager.create_toast_notifier(sys.executable)
+        self._appid = CoreApplication.get_id()
+        self.notifier = self.manager.create_toast_notifier(self._appid)
+
+        # BackgroundExecutionManager.remove_access(self._appid)
+        # CoreApplication.add_background_activated(self._on_background_activated)
 
     async def request_authorisation(self) -> bool:
         """
@@ -172,10 +176,10 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
         Asynchronously removes a notification from the notification center
         """
         group = notification.thread or "default"
-        self.manager.history.remove(notification.identifier, group, sys.executable)
+        self.manager.history.remove(notification.identifier, group, self._appid)
 
     async def _clear_all(self) -> None:
         """
         Asynchronously clears all notifications from notification center
         """
-        self.manager.history.clear(sys.executable)
+        self.manager.history.clear(self._appid)
