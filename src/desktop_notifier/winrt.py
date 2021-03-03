@@ -12,9 +12,22 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from typing import Optional, TypeVar, cast
 
 # external imports
-import winrt.windows.ui.notifications as notifications
-import winrt.windows.data.xml.dom as dom
+from winrt.windows.ui.notifications import (
+    ToastNotificationManager,
+    ToastNotificationPriority,
+    NotificationSetting,
+    ToastNotification,
+    ToastActivatedEventArgs,
+    ToastDismissalReason,
+)
+from winrt.windows.data.xml import dom
 from winrt.windows.applicationmodel.core import CoreApplication
+from winrt.windows.applicationmodel.background import (
+    BackgroundTaskRegistration,
+    BackgroundTaskBuilder,
+    BackgroundExecutionManager,
+    ToastNotificationActionTrigger,
+)
 
 # local imports
 from .base import Notification, DesktopNotifierBase, Urgency
@@ -43,10 +56,12 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
     """
 
     _to_native_urgency = {
-        Urgency.Low: notifications.ToastNotificationPriority.DEFAULT,
-        Urgency.Normal: notifications.ToastNotificationPriority.DEFAULT,
-        Urgency.Critical: notifications.ToastNotificationPriority.HIGH,
+        Urgency.Low: ToastNotificationPriority.DEFAULT,
+        Urgency.Normal: ToastNotificationPriority.DEFAULT,
+        Urgency.Critical: ToastNotificationPriority.HIGH,
     }
+
+    background_task_name = "DesktopNotifier-ToastBackgroundTask"
 
     def __init__(
         self,
@@ -55,8 +70,8 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
         notification_limit: Optional[int] = None,
     ) -> None:
         super().__init__(app_name, app_icon, notification_limit)
-        self.manager = notifications.ToastNotificationManager.get_default()
         self._appid = CoreApplication.get_id()
+        self.manager = ToastNotificationManager.get_default()
         self.notifier = self.manager.create_toast_notifier(self._appid)
 
         # BackgroundExecutionManager.remove_access(self._appid)
@@ -74,7 +89,25 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
         """
         Whether we have authorisation to send notifications.
         """
-        return self.notifier.setting == notifications.NotificationSetting.ENABLED
+        return self.notifier.setting == NotificationSetting.ENABLED
+
+    async def _request_background_task_access(self) -> None:
+        """Request permission to activate in the background."""
+
+        # If background task is already registered, do nothing.
+        tasks = BackgroundTaskRegistration.get_all_tasks()
+        if any(t.value.name == self.background_task_name for t in tasks):
+            return
+
+        # Otherwise request access.
+        await BackgroundExecutionManager.request_access_async(self._appid)
+
+        # Create the background tasks.
+        builder = BackgroundTaskBuilder()
+        builder.name = self.background_task_name
+
+        builder.set_trigger(ToastNotificationActionTrigger())
+        builder.register()
 
     async def _send(
         self,
@@ -92,6 +125,8 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
             platform_nid = cast(str, notification_to_replace.identifier)
         else:
             platform_nid = str(uuid.uuid4())
+
+        await self._request_background_task_access()
 
         # Create notification XML.
         toast_xml = Element("toast", {"launch": "default"})
@@ -133,7 +168,8 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
                 {
                     "content": notification.reply_field.button_title,
                     "activationType": "background",
-                    "arguments": "action=reply",
+                    "arguments": "action=reply&amp",
+                    "hint-inputId": "textBox",
                 },
             )
 
@@ -144,7 +180,7 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
                 {
                     "content": button.title,
                     "activationType": "background",
-                    "arguments": f"action={n}",
+                    "arguments": str(n),
                 },
             )
 
@@ -158,7 +194,7 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
         xml_document = dom.XmlDocument()
         xml_document.load_xml(tostring(toast_xml, encoding="unicode"))
 
-        native = notifications.ToastNotification(xml_document)
+        native = ToastNotification(xml_document)
         native.tag = platform_nid
         native.priority = self._to_native_urgency[notification.urgency]
 
@@ -166,6 +202,39 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
             native.group = notification.thread
         else:
             native.group = "default"
+
+        def on_activated(sender, activated_args):
+            activated_args = ToastActivatedEventArgs._from(activated_args)
+            action_id = activated_args.arguments
+
+            if action_id == "default":
+                if notification.on_clicked:
+                    notification.on_clicked()
+
+            elif action_id == "action=reply&amp":
+                if notification.reply_field.on_replied:
+                    notification.reply_field.on_replied(activated_args.user_input)
+
+            else:
+                action_number = int(action_id)
+                notification.buttons[action_number].on_pressed()
+
+        def on_dismissed(sender, dismissed_args):
+
+            self._clear_notification_from_cache(notification)
+
+            if dismissed_args.reason == ToastDismissalReason.USER_CANCELED:
+                if notification.on_dismissed:
+                    notification.on_dismissed()
+
+        def on_failed(sender, failed_args):
+            logger.warning(
+                f"Notification failed (error code {failed_args.error_code.value})"
+            )
+
+        native.add_activated(on_activated)
+        native.add_dismissed(on_dismissed)
+        native.add_failed(on_failed)
 
         self.notifier.show(native)
 
