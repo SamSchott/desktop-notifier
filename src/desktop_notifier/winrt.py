@@ -162,16 +162,20 @@ class WinRTDesktopNotifier(DesktopNotifierBase):
 
         if notification.reply_field:
             SubElement(actions_xml, "input", {"id": "textBox", "type": "text"})
-            SubElement(
+            reply_button_xml = SubElement(
                 actions_xml,
                 "action",
                 {
                     "content": notification.reply_field.button_title,
                     "activationType": "background",
                     "arguments": "action=reply&amp",
-                    "hint-inputId": "textBox",
                 },
             )
+
+            # If there are no other buttons, show the
+            # reply buttons next to the text field.
+            if not notification.buttons:
+                reply_button_xml.set("hint-inputId", "textBox")
 
         for n, button in enumerate(notification.buttons):
             SubElement(
